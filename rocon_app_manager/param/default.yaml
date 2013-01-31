@@ -1,0 +1,17 @@
+# Standalone mode.
+is_alone: true
+
+robot_name: 'dude'
+# This goes to making up part of the platform_info triple.
+robot_type: 'turtlebot'
+
+# Semi colon separated string. This is very non-portable, use launchers where you can use $(find..) instead
+# app_lists: '/home/jihoonl/ros/groovy/turtlebot/turtlebot_apps/turtlebot_core_apps/turtlebot.apps'
+
+app_store_url: []
+
+# These are currently unused
+white_list: ["concert_master"]
+black_list: ["pirate_master"]
+
+remote_name: "gateway1"
