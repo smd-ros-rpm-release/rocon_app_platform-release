@@ -1,0 +1,12 @@
+Source: ros-groovy-concert-client
+Section: misc
+Priority: extra
+Maintainer: Daniel Stonier <d.stonier@gmail.com>, Jihoon Lee <jihoonl@rnd.yujinrobot.com>
+Build-Depends: debhelper (>= 7.0.50~), ros-groovy-catkin
+Homepage: http://wiki.ros.org/concert_client
+Standards-Version: 3.9.2
+
+Package: ros-groovy-concert-client
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}, ros-groovy-concert-msgs,ros-groovy-gateway-msgs,ros-groovy-redis,ros-groovy-rocon-app-manager-msgs,ros-groovy-rocon-hub-client,ros-groovy-rospy
+Description: Creates the interface for a rocon concert client.
