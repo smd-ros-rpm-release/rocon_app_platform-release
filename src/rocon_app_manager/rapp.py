@@ -17,10 +17,37 @@ import tempfile
 import rocon_utilities
 import utils
 from .exceptions import AppException, InvalidRappException
+import rocon_app_manager_msgs.msg as rapp_manager_msgs
 
 ##############################################################################
 # Class
 ##############################################################################
+
+
+class PairingClient(object):
+    '''
+      A pairing client runs an app which is one which will work in tandem with
+      this robot (rocon) app. The client is usually a smart phone or tablet.
+    '''
+    __slots__ = ['client_type', 'manager_data', 'app_data']
+
+    def __init__(self, client_type, manager_data, app_data):
+        self.client_type = client_type
+        self.manager_data = manager_data
+        self.app_data = app_data
+
+    def as_dict(self):
+        return {'client_type': self.client_type, 'manager_data': self.manager_data, 'app_data': self.app_data}
+
+    def __eq__(self, other):
+        if not isinstance(other, PairingClient):
+            return False
+        return self.client_type == other.client_type and \
+               self.manager_data == other.manager_data and \
+               self.app_data == other.app_data
+
+    def __repr__(self):
+        return yaml.dump(self.as_dict())
 
 
 class Rapp(object):
@@ -28,6 +55,7 @@ class Rapp(object):
         Got many inspiration and imported from willow_app_manager
         implementation (Jihoon)
     '''
+    # I should add a __slots__ definition here to make it easy to read
     path = None
     data = {}
 
@@ -81,27 +109,58 @@ class Rapp(object):
                     raise AppException("Invalid appfile format [" + path + "], missing required key [" + reqd + "]")
 
             data['name'] = app_name
-            data['display'] = app_data.get('display', app_name)
+            data['display_name'] = app_data.get('display', app_name)
             data['description'] = app_data.get('description', '')
             data['platform'] = app_data['platform']
-            data['launch'] = self.loadFromFile(app_data['launch'], 'launch', app_name)
-            data['interface'] = self._load_interface(self.loadFromFile(app_data['interface'], 'interface', app_name))
+            data['launch'] = self._find_rapp_resource(app_data['launch'], 'launch', app_name)
+            data['interface'] = self._load_interface(self._find_rapp_resource(app_data['interface'], 'interface', app_name))
+            data['pairing_clients'] = []
+            data['pairing_clients'] = self._load_pairing_clients(app_data, path)
             if 'icon' not in app_data:
                 data['icon'] = None
             else:
-                data['icon'] = self.loadFromFile(app_data['icon'], 'icon', app_name)
+                data['icon'] = self._find_rapp_resource(app_data['icon'], 'icon', app_name)
             data['status'] = 'Ready'
 
         self.data = data
 
-    def loadFromFile(self, path, log, app_name="Unknown"):
+    def to_msg(self):
+        '''
+          Converts this app definition to ros msg format.
+        '''
+        a = rapp_manager_msgs.App()
+        a.name = self.data['name']
+        a.display_name = self.data['display_name']
+        a.description = self.data['description']
+        a.platform = self.data['platform']
+        a.status = self.data['status']
+        a.icon = utils.icon_to_msg(self.data['icon'])
+        for pairing_client in self.data['pairing_clients']:
+            a.pairing_clients.append(PairingClient(pairing_client.client_type,
+                                       dict_to_KeyValue(pairing_client.manager_data),
+                                       dict_to_KeyValue(pairing_client.app_data)))
+        return a
+
+    def _find_rapp_resource(self, resource, log, app_name="Unknown"):
+        '''
+          A simple wrapper around utils.find_resource to locate rapp resources.
+
+          @param resource is a ros resource (package/name)
+          @type str
+          @param log : string used for log messages when something goes wrong (e.g. 'icon')
+          @type str
+          @param name : app name, also only used for logging purposes
+          @return full path to the resource
+          @type str
+          @raise AppException: if resource does not exist or something else went wrong.
+        '''
         try:
-            data = utils.find_resource(path)
-            if not os.path.exists(data):
-                raise AppException("Invalid appfile [%s]: %s file does not exist." % (app_name, log))
-            return data
+            path_to_resource = utils.find_resource(resource)
+            if not os.path.exists(path_to_resource):
+                raise AppException("invalid appfile [%s]: %s file does not exist." % (app_name, log))
+            return path_to_resource
         except ValueError as e:
-            raise AppException("Invalid appfile [%s]: bad %s entry: %s" % (app_name, log, e))
+            raise AppException("invalid appfile [%s]: bad %s entry: %s" % (app_name, log, e))
             """
         except NotFoundException:
             raise AppException("App file [%s] refers to %s which is not installed"%(app_name,log))
@@ -132,6 +191,30 @@ class Rapp(object):
 
         return d
 
+    def _load_pairing_clients(self, app_data, appfile="UNKNOWN"):
+        '''
+          Load pairing client information from the .rapp file.
+
+          @raise InvalidRappException if the .rapp pairing clients definition was invalid.
+        '''
+        clients_data = app_data.get('pairing_clients', [])
+        clients = []
+        for c in clients_data:
+            for reqd in ['type', 'manager']:
+                if not reqd in c:
+                    raise InvalidRappException("malformed .rapp [%s], missing required key [%s]" % (appfile, reqd))
+            client_type = c['type']
+            manager_data = c['manager']
+            if not type(manager_data) == dict:
+                raise InvalidRappException("malformed .rapp [%s]: manager data must be a map" % (appfile))
+
+            app_data = c.get('app', {})
+            if not type(app_data) == dict:
+                raise InvalidRappException("malformed appfile [%s]: app data must be a map" % (appfile))
+
+            clients.append(PairingClient(client_type, manager_data, app_data))
+        return clients
+
     def start(self, application_namespace, remappings=[]):
         '''
           Some important jobs here.
@@ -149,7 +232,7 @@ class Rapp(object):
           @type list of rocon_app_manager_msgs.msg.Remapping values.
         '''
         data = self.data
-        rospy.loginfo("App Manager : launching: " + (data['name']) + " undernath /" + application_namespace)
+        rospy.loginfo("App Manager : launching: " + (data['name']) + " underneath /" + application_namespace)
 
         # Starts rapp
         try:
@@ -244,3 +327,18 @@ class Rapp(object):
             # time.sleep(1.0)  # do we need this sleep?
             return False
         return True
+
+##############################################################################
+# Utilities
+##############################################################################
+
+
+def dict_to_KeyValue(d):
+    '''
+      Converts a dictionary to key value ros msg type.
+    '''
+    l = []
+    for k, v in d.iteritems():
+        l.append(rapp_manager_msgs.KeyValue(k, str(v)))
+    return l
+
