@@ -21,6 +21,7 @@ catkin_python_setup()
 install(
     PROGRAMS 
         scripts/rapp_manager.py
+        scripts/pairing_master.py
     DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
     )
 
@@ -28,4 +29,10 @@ install(DIRECTORY launch
   DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION})
 
 install(DIRECTORY param
+  DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION})
+
+install(DIRECTORY icons
+  DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION})
+
+install(DIRECTORY concert
   DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION})
