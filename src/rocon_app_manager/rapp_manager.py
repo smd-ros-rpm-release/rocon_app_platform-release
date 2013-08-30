@@ -60,6 +60,7 @@ class RappManager(object):
         self._init_default_service_names()
 
         self._get_pre_installed_app_list()  # It sets up an app directory and load installed app list from directory
+        self._initialising_services = False
         self._init_services()
         self._publish_app_list()
 
@@ -75,6 +76,10 @@ class RappManager(object):
         # Todo fix these up with proper whitelist/blacklists
         self._param['remote_controller_whitelist'] = rospy.get_param('~remote_controller_whitelist', [])
         self._param['remote_controller_blacklist'] = rospy.get_param('~remote_controller_blacklist', [])
+        # Check if rocon is telling us to be verbose about starting apps (this comes from the
+        # rocon_launch --screen option). TODO : additionally a private parameter for the app manager so
+        # people can configure this from yaml or roslaunch instead of rocon_launch
+        self._param['app_output_to_screen'] = rospy.get_param('/rocon/screen', False)
 
         # If we have list parameters - https://github.com/ros/ros_comm/pull/50/commits
         # self._param['rapp_lists'] = rospy.get_param('~rapp_lists', [])
@@ -117,6 +122,15 @@ class RappManager(object):
         self._gateway_publishers['force_update'] = rospy.Publisher("~force_update", std_msgs.Empty)
 
     def _init_services(self):
+        '''
+          This initialises all the app manager services. It depends on whether we're initialising for standalone,
+          or connected (pairing/concert) modes. This should not be activated multiply!
+        '''
+        if self._initialising_services:
+            # We could use a lock to protect this, but since the only places we call this is in the
+            # and in the spin(), then we just use a flag to protect.
+            return False
+        self._initialising_services = True
         if self._services:
             for service in self._services.values():
                 service.shutdown()
@@ -126,18 +140,12 @@ class RappManager(object):
             self._publishers = {}
         self._service_names = {}
         self._publisher_names = {}
-        if self._gateway_name:
-            for name in self._default_service_names:
-                self._service_names[name] = '/' + self._gateway_name + '/' + name
-            for name in self._default_publisher_names:
-                self._publisher_names[name] = '/' + self._gateway_name + '/' + name
-            self._application_namespace = self._gateway_name + '/' + RappManager.default_application_namespace  # ns to push apps into (see rapp.py)
-        else:  # It's a local standalone initialisation
-            self._application_namespace = rospy.get_name() + '/' + RappManager.default_application_namespace  # ns to push apps into (see rapp.py)
-            for name in self._default_service_names:
-                self._service_names[name] = '~' + name
-            for name in self._default_publisher_names:
-                self._publisher_names[name] = '~' + name
+        base_name = self._gateway_name if self._gateway_name else self._param['robot_name']  # latter option is for standalone mode 
+        for name in self._default_service_names:
+            self._service_names[name] = '/' + base_name + '/' + name
+        for name in self._default_publisher_names:
+            self._publisher_names[name] = '/' + base_name + '/' + name
+        self._application_namespace = base_name + '/' + RappManager.default_application_namespace  # ns to push apps into (see rapp.py)
         try:
             # Advertisable services - we advertise these by default advertisement rules for the app manager's gateway.
             self._services['platform_info'] = rospy.Service(self._service_names['platform_info'], rapp_manager_srvs.GetPlatformInfo, self._process_platform_info)
@@ -153,9 +161,11 @@ class RappManager(object):
             self._gateway_publishers['force_update'].publish(std_msgs.Empty())
         except Exception as unused_e:
             traceback.print_exc(file=sys.stdout)
-            return rapp_manager_srvs.InitResponse(False)
+            self._initialising_services = False
+            return False
         self._publish_app_list()
-        return rapp_manager_srvs.InitResponse(True)
+        self._initialising_services = False
+        return True
 
     def _get_pre_installed_app_list(self):
         '''
@@ -197,6 +207,9 @@ class RappManager(object):
         if req.cancel and (req.remote_target_name != self._remote_name):
             rospy.logwarn("App Manager : ignoring request from %s to cancel the relayed controls to remote system [%s]" % (str(req.remote_target_name), self._remote_name))
             return False
+        if not req.cancel and req.remote_target_name == self._remote_name:
+            rospy.logwarn("App Manager : bastards are sending us repeat invites, so we ignore - we are already working for them! [%s]" % self._remote_name)
+            return True
         # Variable setting
         if req.application_namespace == '':
             if self._gateway_name:
@@ -285,13 +298,21 @@ class RappManager(object):
         if self._current_rapp:
             resp.started = False
             resp.message = "an app is already running [%s]" % self._current_rapp.data['name']
+            rospy.logwarn("App Manager : %s" % resp.message)
             return resp
 
         rospy.loginfo("App Manager : starting app : " + req.name)
 
-        rapp = self.apps['pre_installed'][req.name]
+        try:
+            rapp = self.apps['pre_installed'][req.name]
+        except KeyError:
+            resp.started = False
+            resp.message = "requested rapp not found [%s]" % req.name
+            rospy.logwarn("App Manager : %s" % resp.message)
+            return resp
+
         resp.started, resp.message, subscribers, publishers, services, action_clients, action_servers = \
-                        rapp.start(self._application_namespace, req.remappings)
+                        rapp.start(self._application_namespace, req.remappings, self._param['app_output_to_screen'])
 
         rospy.loginfo("App Manager : %s" % self._remote_name)
         # small pause (convenience only) to let connections to come up
@@ -425,7 +446,7 @@ class RappManager(object):
             if gateway_info:
                 if gateway_info.connected:
                     self._gateway_name = gateway_info.name
-                    self._init_services()
-                    break
+                    if self._init_services():
+                        break
             # don't need a sleep since our timeout on the service call acts like this.
         rospy.spin()
