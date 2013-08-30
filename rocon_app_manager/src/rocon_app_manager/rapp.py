@@ -178,11 +178,10 @@ class Rapp(object):
                 for k in keys:
                     raw_data = y.get(k, [])
 
-                    # remote / in front of topics
                     new_data = []
                     for r in raw_data:
-                        if r[0] == '/':
-                            r = r[1:len(r)]
+                        #if r[0] == '/':  # originally removed these, but we really do need to reference such sometimes
+                        #    r = r[1:len(r)]
                         new_data.append(r)
                     d[k] = new_data
 
@@ -215,7 +214,7 @@ class Rapp(object):
             clients.append(PairingClient(client_type, manager_data, app_data))
         return clients
 
-    def start(self, application_namespace, remappings=[]):
+    def start(self, application_namespace, remappings=[], force_screen=False):
         '''
           Some important jobs here.
 
@@ -230,6 +229,8 @@ class Rapp(object):
           @type str
           @param remapping : rules for the app flips.
           @type list of rocon_app_manager_msgs.msg.Remapping values.
+          @param force_screen : whether to roslaunch the app with --screen or not
+          @type boolean
         '''
         data = self.data
         rospy.loginfo("App Manager : launching: " + (data['name']) + " underneath /" + application_namespace)
@@ -245,7 +246,8 @@ class Rapp(object):
             self._launch = roslaunch.parent.ROSLaunchParent(rospy.get_param("/run_id"),
                                                             [temp.name],
                                                             is_core=False,
-                                                            process_listeners=())
+                                                            process_listeners=(),
+                                                            force_screen=force_screen)
             self._launch._load_config()
 
             #print data['interface']
@@ -257,6 +259,7 @@ class Rapp(object):
             for connection_type in ['publishers', 'subscribers', 'services', 'action_clients', 'action_servers']:
                 self._connections[connection_type] = []
                 for t in data['interface'][connection_type]:
+                    remapped_name = None
                     # Now we push the rapp launcher down into the prefixed
                     # namespace, so just use it directly
                     indices = [i for i, x in enumerate(remap_from_list) if x == t]
@@ -265,15 +268,19 @@ class Rapp(object):
                             remapped_name = remap_to_list[indices[0]]
                         else:
                             remapped_name = '/' + application_namespace + "/" + remap_to_list[indices[0]]
+                        for N in self._launch.config.nodes:
+                            N.remap_args.append((t, remapped_name))
+                        self._connections[connection_type].append(remapped_name)
                     else:
-                        # maybe should check that the rapp interface name is not absolute first
-                        if not rocon_utilities.ros.is_absolute_name(t):
-                            remapped_name = '/' + application_namespace + '/' + t
+                        # don't pass these in as remapping rules - they should map fine for the node as is
+                        # just by getting pushed down the namespace.
+                        #     https://github.com/robotics-in-concert/rocon_app_platform/issues/61
+                        # we still need to pass them back to register for flipping though.
+                        if rocon_utilities.ros.is_absolute_name(t):
+                            flipped_name = t
                         else:
-                            remapped_name = t
-                    self._connections[connection_type].append(remapped_name)
-                    for N in self._launch.config.nodes:
-                        N.remap_args.append((t, remapped_name))
+                            flipped_name = '/' + application_namespace + '/' + t
+                        self._connections[connection_type].append(flipped_name)
             self._launch.start()
 
             data['status'] = 'Running'
