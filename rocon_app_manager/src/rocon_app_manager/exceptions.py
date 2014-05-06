@@ -12,36 +12,29 @@
 ##############################################################################
 
 
-class AppException(Exception):
+class RappException(Exception):
     """
-     App Exception
+     Rapp Exception
     """
     pass
 
 
-class NotFoundException(AppException):
+class NotFoundException(RappException):
     """
       Resource Not Found Exception
     """
     pass
 
 
-class IncompatibleAppException(AppException):
-    """
-      App not compatible with this platform.
-    """
-    pass
-
-
-class InvalidPlatformTupleException(Exception):
-    """
-      Platform tuple invalid (must be platform.system.robot
-      using strings from concert_msgs.Constants
-    """
-    pass
-
-
-class InvalidRappException(Exception):
+class InvalidRappException(RappException):
     '''
       Raised if the app definition is invalid.
     '''
+
+
+class MissingCapabilitiesException(Exception):
+    '''
+      Raised if one or more required capabilities are missing.
+    '''
+    def __init__(self, missing_caps):
+        self.missing_caps = missing_caps

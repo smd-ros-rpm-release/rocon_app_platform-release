@@ -9,7 +9,7 @@ project(rocon_app_manager)
 # Catkin
 ##############################################################################
 
-find_package(catkin REQUIRED)
+find_package(catkin REQUIRED roslint)
 catkin_package()
 
 catkin_python_setup()
@@ -21,7 +21,6 @@ catkin_python_setup()
 install(
     PROGRAMS 
         scripts/rapp_manager.py
-        scripts/pairing_master.py
     DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
     )
 

@@ -1,74 +1,48 @@
-#!/usr/bin/env python
 #
 # License: BSD
-#   https://raw.github.com/robotics-in-concert/rocon_app_platform/master/rocon_app_manager/LICENSE
+#   https://raw.github.com/robotics-in-concert/rocon_app_platform/license/LICENSE
 #
 ##############################################################################
 # Imports
 ##############################################################################
 
 import os
-import yaml
-from roslib.packages import InvalidROSPkgException
-import rospy
-import roslaunch.parent
-import traceback
+import subprocess
 import tempfile
-import rocon_utilities
-import utils
-from .exceptions import AppException, InvalidRappException
+
+import rospy
+import traceback
+import rocon_python_utils
 import rocon_app_manager_msgs.msg as rapp_manager_msgs
+from .exceptions import MissingCapabilitiesException
+
+from . import utils
 
 ##############################################################################
 # Class
 ##############################################################################
 
 
-class PairingClient(object):
-    '''
-      A pairing client runs an app which is one which will work in tandem with
-      this robot (rocon) app. The client is usually a smart phone or tablet.
-    '''
-    __slots__ = ['client_type', 'manager_data', 'app_data']
-
-    def __init__(self, client_type, manager_data, app_data):
-        self.client_type = client_type
-        self.manager_data = manager_data
-        self.app_data = app_data
-
-    def as_dict(self):
-        return {'client_type': self.client_type, 'manager_data': self.manager_data, 'app_data': self.app_data}
-
-    def __eq__(self, other):
-        if not isinstance(other, PairingClient):
-            return False
-        return self.client_type == other.client_type and \
-               self.manager_data == other.manager_data and \
-               self.app_data == other.app_data
-
-    def __repr__(self):
-        return yaml.dump(self.as_dict())
-
-
 class Rapp(object):
     '''
-        Got many inspiration and imported from willow_app_manager
-        implementation (Jihoon)
+        Got many inspiration and imported from willow_app_manager implementation
     '''
     # I should add a __slots__ definition here to make it easy to read
-    path = None
-    data = {}
 
-    def __init__(self, resource_name):
+    # standard args that can be put inside a rapp launcher, the rapp manager
+    # will fill these args in when starting the rapp
+
+    def __init__(self, rapp_specification):
         '''
-          @param resource_name : a package/name pair for this rapp
-          @type str/str
+           :param package: this rapp is nested in
+           :type package: :py:class:`catkin_pkg.package.Package`
+           :param package_relative_rapp_filename: string specified by the package export
+           :type package_relative_rapp_filename: os.path
         '''
-        self.filename = ""
-        self._connections = {}
-        for connection_type in ['publishers', 'subscribers', 'services', 'action_clients', 'action_servers']:
-            self._connections[connection_type] = []
-        self._load_from_resource_name(resource_name)
+        self._connections = _init_connections()
+        self._raw_data = rapp_specification
+        self.data = rapp_specification.data
+        self.data['status'] = 'Ready'
 
     def __repr__(self):
         string = ""
@@ -76,145 +50,58 @@ class Rapp(object):
             string += d + " : " + str(self.data[d]) + "\n"
         return string
 
-    def _load_from_resource_name(self, name):
-        '''
-          Loads from a ros resource name consisting of a package/app pair.
-
-          @param name : unique identifier for the app, e.g. rocon_apps/chirp.
-          @type str
-
-          @raise InvalidRappException if the app definition was for some reason invalid.
-        '''
-        if not name:
-            raise InvalidRappException("app name was invalid [%s]" % name)
-        self.filename = utils.find_resource(name + '.rapp')
-        self._load_from_app_file(self.filename, name)
-
-    def _load_from_app_file(self, path, app_name):
-        '''
-          Open and read directly from the app definition file (.rapp file).
-
-          @param path : full path to the .rapp file
-          @param app_name : unique name for the app (comes from the .rapp filename)
-        '''
-        rospy.loginfo("App Manager : loading app '%s'" % app_name)  # str(path)
-        self.filename = path
-
-        with open(path, 'r') as f:
-            data = {}
-            app_data = yaml.load(f.read())
-
-            for reqd in ['launch', 'interface', 'platform']:
-                if not reqd in app_data:
-                    raise AppException("Invalid appfile format [" + path + "], missing required key [" + reqd + "]")
-
-            data['name'] = app_name
-            data['display_name'] = app_data.get('display', app_name)
-            data['description'] = app_data.get('description', '')
-            data['platform'] = app_data['platform']
-            data['launch'] = self._find_rapp_resource(app_data['launch'], 'launch', app_name)
-            data['interface'] = self._load_interface(self._find_rapp_resource(app_data['interface'], 'interface', app_name))
-            data['pairing_clients'] = []
-            data['pairing_clients'] = self._load_pairing_clients(app_data, path)
-            if 'icon' not in app_data:
-                data['icon'] = None
-            else:
-                data['icon'] = self._find_rapp_resource(app_data['icon'], 'icon', app_name)
-            data['status'] = 'Ready'
-
-        self.data = data
-
     def to_msg(self):
         '''
           Converts this app definition to ros msg format.
+
+          :returns: ros message format of Rapp
+          :rtype: rocon_app_manager_msgs.Rapp
         '''
-        a = rapp_manager_msgs.App()
+        a = rapp_manager_msgs.Rapp()
         a.name = self.data['name']
         a.display_name = self.data['display_name']
         a.description = self.data['description']
-        a.platform = self.data['platform']
+        a.compatibility = self.data['compatibility']
         a.status = self.data['status']
-        a.icon = utils.icon_to_msg(self.data['icon'])
-        for pairing_client in self.data['pairing_clients']:
-            a.pairing_clients.append(PairingClient(pairing_client.client_type,
-                                       dict_to_KeyValue(pairing_client.manager_data),
-                                       dict_to_KeyValue(pairing_client.app_data)))
+        a.icon = rocon_python_utils.ros.icon_to_msg(self.data['icon'])
+
+        key = 'required_capabilities'
+        if key in self.data:
+            a.required_capabilities = [cap['name'] for cap in self.data[key]]
+
         return a
 
-    def _find_rapp_resource(self, resource, log, app_name="Unknown"):
+    def install(self, dependency_checker):
         '''
-          A simple wrapper around utils.find_resource to locate rapp resources.
+          Installs all dependencies of the specified rapp
 
-          @param resource is a ros resource (package/name)
-          @type str
-          @param log : string used for log messages when something goes wrong (e.g. 'icon')
-          @type str
-          @param name : app name, also only used for logging purposes
-          @return full path to the resource
-          @type str
-          @raise AppException: if resource does not exist or something else went wrong.
+          :param dependency_checker: DependencyChecker object for installation of the rapp dependencies
+          :type dependency_checker: :py:class:`rocon_app_utilities.rapp_repositories.DependencyChecker`
+
+          :returns: A C{tuple} of a flag for the installation success and a string containing the reason of failure
+          :rtype: C{tuple}
         '''
+        success = False
+
+        # Trigger the installation of all rapp dependencies
+        rapps = []
+        rapps.append(self.data['name'])
         try:
-            path_to_resource = utils.find_resource(resource)
-            if not os.path.exists(path_to_resource):
-                raise AppException("invalid appfile [%s]: %s file does not exist." % (app_name, log))
-            return path_to_resource
-        except ValueError as e:
-            raise AppException("invalid appfile [%s]: bad %s entry: %s" % (app_name, log, e))
-            """
-        except NotFoundException:
-            raise AppException("App file [%s] refers to %s which is not installed"%(app_name,log))
-            """
-        except InvalidROSPkgException as e:
-            raise AppException("App file [%s] refers to %s which is not installed: %s" % (app_name, log, str(e)))
+            dependency_checker.install_rapp_dependencies(rapps)
+        except Exception as e:
+            return success, str(e)
 
-    def _load_interface(self, data):
-        d = {}
-        keys = ['subscribers', 'publishers', 'services', 'action_clients', 'action_servers']
-        with open(data, 'r') as f:
-            y = yaml.load(f.read())
-            y = y or {}
-            try:
-                for k in keys:
-                    raw_data = y.get(k, [])
+        # Update the rospack cache
+        devnull = open(os.devnull, 'w')
+        subprocess.call(['rospack', 'profile'], stdout=devnull, stderr=subprocess.STDOUT)
+        devnull = devnull.close()
 
-                    new_data = []
-                    for r in raw_data:
-                        #if r[0] == '/':  # originally removed these, but we really do need to reference such sometimes
-                        #    r = r[1:len(r)]
-                        new_data.append(r)
-                    d[k] = new_data
+        success = True
 
-            except KeyError:
-                raise AppException("Invalid interface, missing keys")
+        return success, str()
 
-        return d
-
-    def _load_pairing_clients(self, app_data, appfile="UNKNOWN"):
-        '''
-          Load pairing client information from the .rapp file.
-
-          @raise InvalidRappException if the .rapp pairing clients definition was invalid.
-        '''
-        clients_data = app_data.get('pairing_clients', [])
-        clients = []
-        for c in clients_data:
-            for reqd in ['type', 'manager']:
-                if not reqd in c:
-                    raise InvalidRappException("malformed .rapp [%s], missing required key [%s]" % (appfile, reqd))
-            client_type = c['type']
-            manager_data = c['manager']
-            if not type(manager_data) == dict:
-                raise InvalidRappException("malformed .rapp [%s]: manager data must be a map" % (appfile))
-
-            app_data = c.get('app', {})
-            if not type(app_data) == dict:
-                raise InvalidRappException("malformed appfile [%s]: app data must be a map" % (appfile))
-
-            clients.append(PairingClient(client_type, manager_data, app_data))
-        return clients
-
-    def start(self, application_namespace, remappings=[], force_screen=False):
+    def start(self, application_namespace, gateway_name, rocon_uri_string, remappings=[], force_screen=False,
+              caps_list=None):
         '''
           Some important jobs here.
 
@@ -225,72 +112,51 @@ class Rapp(object):
 
           2) Apply remapping rules while ignoring the namespace underneath.
 
-          @param application_namespace ; unique name granted indirectly via the gateways, we namespace everything under this
-          @type str
-          @param remapping : rules for the app flips.
-          @type list of rocon_app_manager_msgs.msg.Remapping values.
-          @param force_screen : whether to roslaunch the app with --screen or not
-          @type boolean
+          :param application_namespace: unique name granted indirectly via the gateways, we namespace everything under this
+          :type application_namespace: str
+          :param gateway_name: unique name granted to the gateway
+          :type gateway_name: str
+          :param rocon_uri_string: uri of the app manager's platform (used as a check for compatibility)
+          :type rocon_uri_string: str - a rocon uri string
+          :param remapping: rules for the app flips.
+          :type remapping: list of rocon_std_msgs.msg.Remapping values.
+          :param force_screen: whether to roslaunch the app with --screen or not
+          :type force_screen: boolean
+          :param caps_list: this holds the list of available capabilities, if app needs capabilities
+          :type caps_list: CapsList
         '''
         data = self.data
-        rospy.loginfo("App Manager : launching: " + (data['name']) + " underneath /" + application_namespace)
 
-        # Starts rapp
         try:
+            nodelet_manager_name = caps_list.nodelet_manager_name if caps_list else None
+
             temp = tempfile.NamedTemporaryFile(mode='w+t', delete=False)
-            launch_text = '<launch>\n  <include ns="%s" file="%s"/>\n</launch>\n' % (application_namespace, data['launch'])
-            temp.write(launch_text)
-            temp.close()  # unlink it later
+            self._launch = utils.prepare_launcher(data, application_namespace, gateway_name, rocon_uri_string, nodelet_manager_name, force_screen, temp)
 
-            # Create roslaunch
-            self._launch = roslaunch.parent.ROSLaunchParent(rospy.get_param("/run_id"),
-                                                            [temp.name],
-                                                            is_core=False,
-                                                            process_listeners=(),
-                                                            force_screen=force_screen)
-            self._launch._load_config()
+            # Better logic for the future, 1) get remap rules from capabilities. 2) get remap rules from requets. 3) apply them all. It would be clearer to understand the logic and easily upgradable
+            if 'required_capabilities' in data:  # apply capability-specific remappings needed
+                utils.apply_remapping_rules_from_capabilities(self._launch, data, caps_list)
 
-            #print data['interface']
-            self._connections = {}
+            self._connections = utils.apply_remapping_rules_from_start_app_request(self._launch, data, remappings, application_namespace)
 
-            # Prefix with robot name by default (later pass in remap argument)
-            remap_from_list = [remapping.remap_from for remapping in remappings]
-            remap_to_list = [remapping.remap_to for remapping in remappings]
-            for connection_type in ['publishers', 'subscribers', 'services', 'action_clients', 'action_servers']:
-                self._connections[connection_type] = []
-                for t in data['interface'][connection_type]:
-                    remapped_name = None
-                    # Now we push the rapp launcher down into the prefixed
-                    # namespace, so just use it directly
-                    indices = [i for i, x in enumerate(remap_from_list) if x == t]
-                    if indices:
-                        if rocon_utilities.ros.is_absolute_name(remap_to_list[indices[0]]):
-                            remapped_name = remap_to_list[indices[0]]
-                        else:
-                            remapped_name = '/' + application_namespace + "/" + remap_to_list[indices[0]]
-                        for N in self._launch.config.nodes:
-                            N.remap_args.append((t, remapped_name))
-                        self._connections[connection_type].append(remapped_name)
-                    else:
-                        # don't pass these in as remapping rules - they should map fine for the node as is
-                        # just by getting pushed down the namespace.
-                        #     https://github.com/robotics-in-concert/rocon_app_platform/issues/61
-                        # we still need to pass them back to register for flipping though.
-                        if rocon_utilities.ros.is_absolute_name(t):
-                            flipped_name = t
-                        else:
-                            flipped_name = '/' + application_namespace + '/' + t
-                        self._connections[connection_type].append(flipped_name)
+            utils.resolve_chain_remappings(self._launch.config.nodes)
             self._launch.start()
 
             data['status'] = 'Running'
-            return True, "Success", self._connections['subscribers'], self._connections['publishers'], self._connections['services'], self._connections['action_clients'], self._connections['action_servers']
+            return True, "Success", self._connections['subscribers'], self._connections['publishers'], \
+                self._connections['services'], self._connections['action_clients'], self._connections['action_servers']
 
+        except rospy.ServiceException as e:
+            rospy.logerr("App Manager : Couldn't get cap remappings. Error: " + str(e))
+            return False, "Error while launching " + data['name'], [], [], [], [], []
+        except MissingCapabilitiesException as e:
+            rospy.logerr("Rapp Manager : couldn't get capability remappings. Error: " + str(e))
+            return False, "Error while launching " + data['name'], [], [], [], [], []
         except Exception as e:
             print str(e)
             traceback.print_stack()
-            rospy.loginfo("Error While launching " + data['launch'])
-            data['status'] = "Error While launching " + data['launch']
+            rospy.logerr("Rapp Manager : error while launching " + data['launch'])
+            data['status'] = "Error while launching " + data['launch']
             return False, "Error while launching " + data['name'], [], [], [], [], []
         finally:
             os.unlink(temp.name)
@@ -305,14 +171,17 @@ class Rapp(object):
                 finally:
                     self._launch = None
                     data['status'] = 'Ready'
-                rospy.loginfo("App Manager : stopped app [%s]" % data['name'])
+                rospy.loginfo("Rapp Manager : stopped rapp [%s]" % data['name'] + "'.")
         except Exception as e:
             print str(e)
-            rospy.loginfo("Error while stopping " + data['name'])
+            error_msg = "Error while stopping rapp '" + data['name'] + "'."
+            rospy.loginfo(error_msg)
             data['status'] = 'Error'
-            return False, "Error while stopping " + data['name'], self._connections['subscribers'], self._connections['publishers'], self._connections['services'], self._connections['action_clients'], self._connections['action_servers']
+            return False, error_msg, self._connections['subscribers'], self._connections['publishers'], \
+                self._connections['services'], self._connections['action_clients'], self._connections['action_servers']
 
-        return True, "Success", self._connections['subscribers'], self._connections['publishers'], self._connections['services'], self._connections['action_clients'], self._connections['action_servers']
+        return True, "Success", self._connections['subscribers'], self._connections['publishers'], \
+            self._connections['services'], self._connections['action_clients'], self._connections['action_servers']
 
     def is_running(self):
         '''
@@ -325,8 +194,8 @@ class Rapp(object):
 
          Used by the rapp_manager.
 
-         @return True if the rapp is executing or False otherwise.
-         @type Bool
+         :returns: True if the rapp is executing or False otherwise.
+         :rtype: Bool
         '''
         if not self._launch:
             return False
@@ -335,16 +204,38 @@ class Rapp(object):
             return False
         return True
 
+
 ##############################################################################
 # Utilities
 ##############################################################################
+def convert_rapps_from_rapp_specs(rapp_specs):
+    '''
+      Converts rocon_app_utilities.Rapp into rocon_app_manager.Rapp
+
+      :param rapp_specs: dict of rapp specification
+      :type rapp_specs: {ancestor_name: rocon_app_utilities.Rapp}
+
+      :returns: runnable rapps
+      :rtype: {ancestor_name:rocon_app_manager.Rapp}
+    '''
+    runnable_rapps = {}
+
+    for name, spec in rapp_specs.items():
+        r = Rapp(spec)
+        runnable_rapps[name] = r
+    return runnable_rapps
 
 
-def dict_to_KeyValue(d):
+def _init_connections():
     '''
-      Converts a dictionary to key value ros msg type.
+      Initialise connections which use as public interface
+
+      :returns: dict of connections with empty list
+      :rtype: {connection_type: list}
     '''
-    l = []
-    for k, v in d.iteritems():
-        l.append(rapp_manager_msgs.KeyValue(k, str(v)))
-    return l
+    PUBLIC_CONNECTION_TYPES = ['publishers', 'subscribers', 'services', 'action_clients', 'action_servers']
+    connections = {}
+    for connection_type in PUBLIC_CONNECTION_TYPES:
+        connections[connection_type] = []
+    return connections
+
