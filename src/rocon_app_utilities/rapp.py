@@ -22,10 +22,11 @@ class Rapp(object):
     '''
         Rocon(or Robot) App definition.
     '''
-    __slots__ = ['resource_name', 'raw_data', 'data', 'type', 'is_implementation', 'is_ancestor', 'ancestor_name', 'parent_name', 'rospack', 'package', 'filename']
+    __slots__ = ['resource_name', 'yaml_data', 'raw_data', 'data', 'type', 'is_implementation', 'is_ancestor', 'ancestor_name', 'parent_name', 'rospack', 'package', 'filename']
 
     def __init__(self, name, rospack=rospkg.RosPack(), filename=None):
         self.resource_name = name
+        self.yaml_data = {}
         self.raw_data = {}
         self.data = {}
         self.type = None
@@ -38,7 +39,7 @@ class Rapp(object):
         if filename:
             self.load_rapp_yaml_from_file(filename)
 
-        self.package = None
+        #self.package = None
 
     def __str__(self):
         return str(self.resource_name + ' - ' + self.type)
@@ -80,15 +81,19 @@ class Rapp(object):
           :param filename: absolute path to rapp definition
           :type filename: str
         '''
-        self.raw_data = load_rapp_yaml_from_file(filename)
-        self.filename = filename
-        self.classify()
+
+        try:
+            self.yaml_data, self.raw_data = load_rapp_yaml_from_file(filename)
+            self.filename = filename
+            self.classify()
+        except RappResourceNotExistException as e:
+            raise InvalidRappException(str(self.resource_name) + ' : ' + str(e))
 
     def load_rapp_specs_from_file(self):
         '''
            Specification consists of resource which is file pointer. This function loads those files in memeory
         '''
-        self.data = load_rapp_specs_from_file(self, self.rospack)
+        self.data = load_rapp_specs_from_file(self)
 
     def inherit(self, rapp):
         '''
