@@ -1,6 +1,11 @@
 Changelog
 =========
 
+0.7.2 (2014-08-25)
+------------------
+* 0.7.1
+* Contributors: Daniel Stonier
+
 0.7.1 (2014-05-26)
 ------------------
 * minor runtime improvements, crash handling.
