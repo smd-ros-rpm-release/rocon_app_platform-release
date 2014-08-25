@@ -1,3 +1,28 @@
+## rocon_app_platform (indigo) - 0.7.2-0
+
+The packages in the `rocon_app_platform` repository were released into the `indigo` distro by running `/usr/bin/bloom-release rocon_app_platform -t indigo -r indigo` on `Mon, 25 Aug 2014 08:38:47 -0000`
+
+These packages were released:
+- `rocon_app_manager`
+- `rocon_app_platform`
+- `rocon_app_utilities`
+- `rocon_apps`
+
+Version of package(s) in repository `rocon_app_platform`:
+- upstream repository: http://github.com/robotics-in-concert/rocon_app_platform
+- release repository: https://github.com/yujinrobot-release/rocon_app_platform-release.git
+- rosdistro version: `0.7.1-0`
+- old version: `0.7.1-0`
+- new version: `0.7.2-0`
+
+Versions of tools used:
+- bloom version: `0.5.11`
+- catkin_pkg version: `0.2.4`
+- rosdep version: `0.10.30`
+- rosdistro version: `0.3.5`
+- vcstools version: `0.1.35`
+
+
 ## rocon_app_platform (indigo) - 0.7.1-0
 
 User `snorri@snorriheim` released the packages in the `rocon_app_platform` repository into the `indigo` distro by running `/usr/bin/bloom-release --track indigo --rosdistro indigo rocon_app_platform` on `Mon, 26 May 2014 13:56:33 -0000`
