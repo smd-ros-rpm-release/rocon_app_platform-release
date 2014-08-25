@@ -8,6 +8,7 @@ import rospy
 import roslaunch.parent
 import roslib.names
 import rocon_std_msgs.msg as rocon_std_msgs
+import copy
 from .exceptions import MissingCapabilitiesException
 
 ##############################################################################
@@ -31,7 +32,7 @@ def dict_to_KeyValue(d):
     return l
 
 
-def _prepare_launch_text(launch_file, launch_args, application_namespace,
+def _prepare_launch_text(launch_file, launch_args, public_parameters, application_namespace,
                          gateway_name, rocon_uri_string, capability_server_nodelet_manager_name=None):
     '''
       Prepare the launch file text. This essentially wraps the rapp launcher
@@ -71,9 +72,16 @@ def _prepare_launch_text(launch_file, launch_args, application_namespace,
     launch_arg_mapping['rocon_uri'] = rocon_uri_string
     launch_arg_mapping['capability_server_nodelet_manager_name'] = capability_server_nodelet_manager_name
 
-    launch_text = '<launch>\n  <include ns="%s" file="%s">\n' % (application_namespace, launch_file)
+    if(application_namespace == ""):
+        launch_text = '<launch>\n  <include file="%s">\n' % (launch_file)
+    else:
+        launch_text = '<launch>\n  <include ns="%s" file="%s">\n' % (application_namespace, launch_file)
+
     for arg in launch_args:
         launch_text += '    <arg name="%s" value="%s"/>' % (arg, launch_arg_mapping[arg])
+    for name, value in public_parameters.items():
+        launch_text += '    <arg name="%s" value="%s"/>' % (name, value)
+
     launch_text += '  </include>\n</launch>\n'
     return launch_text
 
@@ -102,7 +110,7 @@ def resolve_chain_remappings(nodes):
         n.remap_args = new_remap_args_dict.items()
 
 
-def prepare_launcher(data, application_namespace, gateway_name, rocon_uri_string, nodelet_manager_name, force_screen, temp):
+def prepare_launcher(data, public_parameters, application_namespace, gateway_name, rocon_uri_string, capability_nodelet_manager_name, force_screen, temp):
     '''
       prepare roslaunch to start rapp.
     '''
@@ -110,10 +118,11 @@ def prepare_launcher(data, application_namespace, gateway_name, rocon_uri_string
 
     launch_text = _prepare_launch_text(data['launch'],
                                        data['launch_args'],
+                                       public_parameters,
                                        application_namespace,
                                        gateway_name,
                                        rocon_uri_string,
-                                       nodelet_manager_name)
+                                       capability_nodelet_manager_name)
     temp.write(launch_text)
     temp.close()  # unlink it later
 
@@ -183,26 +192,60 @@ def apply_remapping_rules_from_start_app_request(launch_spec, data, remappings, 
     for connection_type in ['publishers', 'subscribers', 'services', 'action_clients', 'action_servers']:
         connections[connection_type] = []
         for t in data['public_interface'][connection_type]:
+            if not type(t) is dict:
+                rospy.logwarn("Rapp Manager : Public interface has deprecated format. Please update %s includes name and type"%t)
+                interface_name = t
+            else:
+                interface_name = t['name']
+                interface_type = t['type']
             remapped_name = None
             # Now we push the rapp launcher down into the prefixed
             # namespace, so just use it directly
-            indices = [i for i, x in enumerate(remap_from_list) if x == t]
+            indices = [i for i, x in enumerate(remap_from_list) if x == interface_name]
             if indices:
                 if roslib.names.is_global(remap_to_list[indices[0]]):
                     remapped_name = remap_to_list[indices[0]]
                 else:
                     remapped_name = '/' + application_namespace + "/" + remap_to_list[indices[0]]
                 for N in launch_spec.config.nodes:
-                    N.remap_args.append((t, remapped_name))
+                    N.remap_args.append((interface_name, remapped_name))
                 connections[connection_type].append(remapped_name)
             else:
                 # don't pass these in as remapping rules - they should map fine for the node as is
                 # just by getting pushed down the namespace.
                 #     https://github.com/robotics-in-concert/rocon_app_platform/issues/61
                 # we still need to pass them back to register for flipping though.
-                if roslib.names.is_global(t):
-                    flipped_name = t
+                if roslib.names.is_global(interface_name):
+                    flipped_name = interface_name
                 else:
-                    flipped_name = '/' + application_namespace + '/' + t
+                    flipped_name = '/' + application_namespace + '/' + interface_name
                 connections[connection_type].append(flipped_name)
     return connections
+
+
+def apply_requested_public_parameters(default_parameters, requested_parameters):
+    '''
+    validate the requested public parameters, and apply them
+
+    :param default_parameters: default public parameters written in rapp specification
+    :type default_parameters: dict
+    :param requested_parameters: given from start_rapp request
+    :type requested_parameters: [rocon_std_msgs.KeyValue]
+    
+    :returns: A resolved public_parameters
+    :rtype: {name: value}
+    '''
+
+    public_parameters = copy.deepcopy(default_parameters)
+
+    # validate whether requested parameters are in public parameter list
+    valid_params = {param.key:param.value for param in requested_parameters if param.key in default_parameters}
+    invalid_params = [param for param in requested_parameters if not param.key in default_parameters]
+
+    if invalid_params:
+        rospy.logwarn('Rapp Manager : Skipping invalid public parameters[%s]'%str(invalid_params))
+
+    for key, val in valid_params.items():
+        public_parameters[key] = val
+
+    return public_parameters
